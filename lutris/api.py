@@ -223,7 +223,7 @@ def format_version_architecture(base_version: str, arch: Optional[str] = None) -
     return base_version
 
 
-def parse_version_architecture(version_name: str) -> Tuple[str, str]:
+def parse_version_architecture(version_name: str) -> Tuple[str, Optional[str]]:
     """Splits a version that ends with an architecture into the plain version and
     architecture, as a tuple. If the version has no architecture, this provides
     the system's architecture instead."""
