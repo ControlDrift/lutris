@@ -17,7 +17,7 @@ from lutris.services.base import SERVICE_LOGIN, OnlineService
 from lutris.services.service_game import ServiceGame
 from lutris.services.service_media import ServiceMedia
 from lutris.util import system
-from lutris.util.http import Request
+from lutris.util.http import HTTPError, Request
 from lutris.util.log import logger
 from lutris.util.strings import computer_size
 
@@ -191,7 +191,12 @@ class ZoomService(OnlineService):
         for extra_type in ["manual", "misc", "soundtrack"]:
             files = files_request[extra_type]
             for file in files:
-                download_request = self.make_request(f"{self.api_url}/li/download/{file['id']}")
+                try:
+                    download_request = self.make_request(f"{self.api_url}/li/download/{file['id']}")
+                except HTTPError as ex:
+                    logger.exception("Unable to locate extra '%s': %s", file.get("name"), ex)
+                    continue
+
                 extra_file_dict = {
                     "name": file["name"],
                     "url": download_request["url"],
