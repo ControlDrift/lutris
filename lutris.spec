@@ -1,8 +1,8 @@
 %global appid net.lutris.Lutris
 
 Name:           lutris
-Version:        0.5.20
-Release:        7%{?dist}
+Version:        0.5.21
+Release:        1%{?dist}
 Summary:        Video game preservation platform
 
 License:        GPL-3.0+
@@ -139,6 +139,9 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/%{appid}1.desktop
 %{_datadir}/locale/
 
 %changelog
+* Tue Feb 24 2026 Mathieu Comandon <mathieucomandon@gmail.com> 0.5.21
+- Release 0.5.21
+
 * Wed Dec 31 2025 Christophe Henry <contact@c-henry.fr> 0.5.20
 - Add .lutris file type association to install from local script
 
