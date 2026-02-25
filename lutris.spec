@@ -70,7 +70,7 @@ emulators, engine re-implementations and compatibility layers,
 it gives you a central interface to launch all your games.
 
 %prep
-%autosetup -n %{name}-%{version} -p1
+%autosetup -n %{name} -p1
 
 %build
 %py3_build
