@@ -45,7 +45,7 @@ class Request:
         timeout: int = DEFAULT_TIMEOUT,
         stop_request: threading.Event = None,
         headers: Dict[str, str] = None,
-        cookies: CookieJar = None,
+        cookies: "CookieJar" = None,
         redacted_query_parameters: Collection[str] = None,
     ):
         self.url = self._clean_url(url)
@@ -150,7 +150,7 @@ class Request:
         request.close()
         return self
 
-    def _iter_chunks(self, request: HTTPResponse) -> Generator[bytes, None, bytes]:
+    def _iter_chunks(self, request: "HTTPResponse") -> Generator[bytes, None, bytes]:
         while 1:
             if self.stop_request and self.stop_request.is_set():
                 self.content = b""
