@@ -28,6 +28,15 @@
   <url type="vcs-browser">https://github.com/lutris/lutris</url>
   <launchable type="desktop-id">net.lutris.Lutris.desktop</launchable>
   <releases>
+    <release version="0.5.22" date="2026-02-24" urgency="low">
+      <description>
+        <ul>
+          <li>Fix type annotations requiring quoting for Python &lt; 3.14 compatibility</li>
+          <li>Add mypy typing annotations on util/strings.py</li>
+          <li>Update release targets in PPA CI</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.21" date="2026-02-24" urgency="low">
       <description>
         <ul>
