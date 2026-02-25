@@ -43,7 +43,7 @@ class Request:
         self,
         url: str,
         timeout: int = DEFAULT_TIMEOUT,
-        stop_request: threading.Event = None,
+        stop_request: "threading.Event" = None,
         headers: Dict[str, str] = None,
         cookies: "CookieJar" = None,
         redacted_query_parameters: Collection[str] = None,
