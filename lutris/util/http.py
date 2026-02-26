@@ -23,7 +23,12 @@ if TYPE_CHECKING:
 
 DEFAULT_TIMEOUT = read_setting("default_http_timeout") or 30
 
-ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+
+def _create_ssl_context() -> ssl.SSLContext:
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+ssl._create_default_https_context = _create_ssl_context
 
 
 class HTTPError(Exception):
