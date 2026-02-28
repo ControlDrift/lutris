@@ -43,7 +43,8 @@ def rename_config(old_config_id: str, new_slug: str) -> Optional[str]:
     new_config_id = f"{new_slug}-{timestamp}"
     src_path = f"{settings.GAME_CONFIG_DIR}/{old_config_id}.yml"
     dest_path = f"{settings.GAME_CONFIG_DIR}/{new_config_id}.yml"
-    os.rename(src_path, dest_path)
+    if os.path.exists(src_path):
+        os.rename(src_path, dest_path)
     return new_config_id
 
 
