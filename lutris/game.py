@@ -79,12 +79,14 @@ class Game:
         # Load attributes from database
         game_data = games_db.get_game_by_field(game_id, "id")
 
+        self._config = None
+        self._game_config_id = game_data.get("configpath") or ""
+
         self.slug = game_data.get("slug") or ""
         self._runner_name = game_data.get("runner") or ""
         self.directory = game_data.get("directory") or ""
         self.name = game_data.get("name") or ""
         self.sortname = game_data.get("sortname") or ""
-        self.game_config_id = game_data.get("configpath") or ""
         self.is_installed = bool(game_data.get("installed") and self.game_config_id)
         self.platform = game_data.get("platform") or ""
         self.year = game_data.get("year") or ""
@@ -106,7 +108,6 @@ class Game:
 
         self.discord_id = game_data.get("discord_id")  # Discord App ID for RPC
 
-        self._config = None
         self._runner = None
 
         self.game_uuid = None
@@ -292,6 +293,16 @@ class Game:
             return self.resolve_game_path()
 
     @property
+    def game_config_id(self) -> str:
+        return self._game_config_id
+
+    @game_config_id.setter
+    def game_config_id(self, value: str) -> None:
+        self._game_config_id = value
+        if self._config is not None:
+            self._config.game_config_id = value
+
+    @property
     def config(self) -> Union[LutrisConfig, None]:
         if not self.is_installed or not self.game_config_id:
             return None
@@ -304,7 +315,7 @@ class Game:
         self._config = value
         self._runner = None
         if value:
-            self.game_config_id = value.game_config_id
+            self._game_config_id = value.game_config_id
 
     def reload_config(self) -> None:
         """Triggers the config to reload when next used; this also reloads the runner,

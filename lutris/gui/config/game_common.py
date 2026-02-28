@@ -426,7 +426,7 @@ class GameDialogCommon(SavableModelessDialog, DialogInstallUIDelegate):  # type:
 
         # Rename config file if game slug changed
         if new_config_id := rename_config(self.game.config.game_config_id, self.game.slug):
-            self.game.config.game_config_id = new_config_id
+            self.game.game_config_id = new_config_id
 
         self.game.runner_name = self.runner_name
 
