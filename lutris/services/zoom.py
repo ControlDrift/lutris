@@ -310,6 +310,13 @@ class ZoomService(OnlineService):
     def get_service_game(self, zoom_game: dict) -> ZoomGame:
         return ZoomGame.new_from_zoom_game(zoom_game)
 
+    def get_game_platforms(self, db_game: dict) -> List[str]:
+        details = db_game.get("details")
+        if details:
+            operating_systems = json.loads(details).get("operating_systems", [])
+            return [os_name.capitalize() for os_name in operating_systems]
+        return []
+
     def get_game_details(self, product_id: str) -> dict:
         logger.debug("Getting game details for %s", product_id)
         return {}
