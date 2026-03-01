@@ -1,18 +1,16 @@
 """Store object for a list of games"""
 
 # pylint: disable=not-an-iterable
-import time
 from typing import TYPE_CHECKING, Optional, Set, Union
 
 if TYPE_CHECKING:
     from lutris.services.base import BaseService
     from lutris.services.service_media import ServiceMedia
 
-from gi.repository import GLib, GObject, Gtk
+from gi.repository import GObject, Gtk
 
 from lutris import settings
-from lutris.database import sql
-from lutris.database.games import get_all_installed_game_for_service, get_games
+from lutris.database.games import get_all_installed_game_for_service
 from lutris.gui.views.store_item import StoreItem
 from lutris.util.strings import gtk_safe
 
@@ -78,9 +76,6 @@ class GameStore(GObject.Object):
         super().__init__()
         self.service = service
         self.service_media = service_media
-        self._installed_games: list[str] = []
-        self._installed_games_accessed = 0.0
-        self._icon_updates = {}
         self._rows_by_id: dict[str, Gtk.TreeRowReference] = {}
 
         self.store = Gtk.ListStore(
@@ -101,19 +96,6 @@ class GameStore(GObject.Object):
             float,
             str,
         )
-
-    @property
-    def installed_game_slugs(self):
-        previous_access = self._installed_games_accessed or 0
-        self._installed_games_accessed = time.time()
-        if self._installed_games_accessed - previous_access > 1:
-            self._installed_games = [g["slug"] for g in get_games(filters={"installed": "1"})]
-        return self._installed_games
-
-    def get_row_by_slug(self, slug):
-        for model_row in self.store:
-            if model_row[COL_SLUG] == slug:
-                return model_row
 
     def get_row_by_id(self, _id):
         if not _id:
@@ -223,16 +205,3 @@ class GameStore(GObject.Object):
             else:
                 self.add_game(db_game)
 
-    def on_game_updated(self, game):
-        if self.service:
-            db_games = sql.filtered_query(
-                settings.DB_PATH,
-                "service_games",
-                filters=({"service": self.service, "appid": game.appid}),
-            )
-        else:
-            db_games = sql.filtered_query(settings.DB_PATH, "games", filters=({"id": game.id}))
-
-        for db_game in db_games:
-            GLib.idle_add(self.update, db_game)
-        return True
