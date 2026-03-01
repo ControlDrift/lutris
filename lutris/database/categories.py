@@ -178,15 +178,26 @@ def get_uncategorized_games() -> List[Any]:
     return games
 
 
-def get_categories_in_game(game_id):
+def get_categories_in_game(game_id: str) -> list[str]:
     """Get the categories of a game in database."""
+    return get_categories_in_games([game_id]).get(game_id, [])
+
+
+def get_categories_in_games(game_ids: list[str]) -> dict[str, list[str]]:
+    """Get the categories of multiple games in database, returned as a dict mapping game ID to category names."""
+    if not game_ids:
+        return {}
+    placeholders = ", ".join(repeat("?", len(game_ids)))
     query = (
-        "SELECT categories.name FROM categories "
+        "SELECT games.id, categories.name FROM categories "
         "JOIN games_categories ON categories.id = games_categories.category_id "
         "JOIN games ON games.id = games_categories.game_id "
-        "WHERE games.id=?"
+        f"WHERE games.id IN ({placeholders})"
     )
-    return [category["name"] for category in sql.db_query(settings.DB_PATH, query, (game_id,))]
+    result: dict[str, list[str]] = defaultdict(list)
+    for row in sql.db_query(settings.DB_PATH, query, tuple(game_ids)):
+        result[str(row["id"])].append(row["name"])
+    return dict(result)
 
 
 def add_category(category_name, no_signal: bool = False):
