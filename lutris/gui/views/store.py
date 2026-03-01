@@ -2,7 +2,11 @@
 
 # pylint: disable=not-an-iterable
 import time
-from typing import Set, Union
+from typing import TYPE_CHECKING, Optional, Set, Union
+
+if TYPE_CHECKING:
+    from lutris.services.base import BaseService
+    from lutris.services.service_media import ServiceMedia
 
 from gi.repository import GLib, GObject, Gtk
 
@@ -70,13 +74,14 @@ def sort_func(model, row1, row2, sort_col):
 
 
 class GameStore(GObject.Object):
-    def __init__(self, service, service_media):
+    def __init__(self, service: Optional["BaseService"], service_media: "ServiceMedia") -> None:
         super().__init__()
         self.service = service
         self.service_media = service_media
-        self._installed_games = []
-        self._installed_games_accessed = False
+        self._installed_games: list[str] = []
+        self._installed_games_accessed = 0.0
         self._icon_updates = {}
+        self._rows_by_id: dict[str, Gtk.TreeRowReference] = {}
 
         self.store = Gtk.ListStore(
             str,
@@ -113,17 +118,17 @@ class GameStore(GObject.Object):
     def get_row_by_id(self, _id):
         if not _id:
             return
-        for model_row in self.store:
-            try:
-                if model_row[COL_ID] == str(_id):
-                    return model_row
-            except TypeError:
-                return
+        row_ref = self._rows_by_id.get(str(_id))  # _id may arrive as int
+        if row_ref is not None:
+            path = row_ref.get_path()
+            if path is not None:
+                return self.store[path]
 
     def remove_game(self, _id):
         """Remove a game from the view."""
         row = self.get_row_by_id(_id)
         if row:
+            self._rows_by_id.pop(str(_id), None)
             self.store.remove(row.iter)
 
     def update(self, db_game: dict) -> Union[Set[int], None]:
@@ -138,9 +143,10 @@ class GameStore(GObject.Object):
         if not row:
             return None
 
+        old_id = row[COL_ID]
         new_values = dict()
 
-        new_values[COL_ID] = str(store_item.id)
+        new_values[COL_ID] = store_item.id
         new_values[COL_SLUG] = store_item.slug
         new_values[COL_NAME] = store_item.name
         new_values[COL_SORTNAME] = store_item.sortname if store_item.sortname else store_item.name
@@ -162,6 +168,13 @@ class GameStore(GObject.Object):
             if row[idx] != value:
                 row[idx] = value
                 changed_indices.add(idx)
+
+        new_id = store_item.id
+        if old_id != new_id:
+            row_ref = self._rows_by_id.pop(old_id, None)
+            if row_ref is not None:
+                self._rows_by_id[new_id] = row_ref
+
         return changed_indices
 
     def add_game(self, db_game):
@@ -170,7 +183,7 @@ class GameStore(GObject.Object):
         self.add_item(store_item)
 
     def add_item(self, store_item):
-        self.store.append(
+        tree_iter = self.store.append(
             (
                 store_item.id,
                 store_item.slug,
@@ -190,6 +203,7 @@ class GameStore(GObject.Object):
                 store_item.playtime_text,
             )
         )
+        self._rows_by_id[store_item.id] = Gtk.TreeRowReference(self.store, self.store.get_path(tree_iter))
 
     def add_preloaded_games(self, db_games, service_id):
         """Add games to the store, but preload their installed-game data
