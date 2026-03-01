@@ -266,7 +266,7 @@ class Game:
         _log_buffer = Gtk.TextBuffer()
         _log_buffer.create_tag("warning", foreground="red")
         if self.game_thread:
-            self.game_thread.set_log_buffer(self._log_buffer)
+            self.game_thread.set_log_buffer(_log_buffer)
             _log_buffer.set_text(self.game_thread.stdout)
         LOG_BUFFERS[self.id] = _log_buffer
         return _log_buffer
