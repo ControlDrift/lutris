@@ -9,7 +9,7 @@ import signal
 import subprocess
 import time
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
 
 from gi.repository import Gio, GLib, Gtk
 
@@ -55,6 +55,16 @@ GAME_UPDATED = NotificationSource()
 GAME_INSTALLED = NotificationSource()
 GAME_UNHANDLED_ERROR = NotificationSource()
 
+_categories_generation: int = 0
+
+
+def _on_categories_updated(*_args) -> None:
+    global _categories_generation
+    _categories_generation += 1
+
+
+categories_db.CATEGORIES_UPDATED.register(_on_categories_updated)
+
 
 class Game:
     """This class takes cares of loading the configuration for a game
@@ -73,6 +83,8 @@ class Game:
         super().__init__()
 
         self.game_error = NotificationSource()
+        self._categories_cache: list[str] = []
+        self._categories_cache_generation = -1
 
         self._id = str(game_id) if game_id else None  # pylint: disable=invalid-name
 
@@ -169,9 +181,14 @@ class Game:
         """Return whether the game can be upgraded"""
         return self.is_installed and self.service in ["gog", "itchio"]
 
-    def get_categories(self) -> List[Optional[str]]:
+    def get_categories(self) -> list[str]:
         """Return the categories the game is in."""
-        return categories_db.get_categories_in_game(self.id) if self.is_db_stored else []
+        if not self.is_db_stored:
+            return []
+        if self._categories_cache_generation != _categories_generation:
+            self._categories_cache = categories_db.get_categories_in_game(self.id)
+            self._categories_cache_generation = _categories_generation
+        return self._categories_cache
 
     def update_game_categories(self, added_category_names: list, removed_category_names: list) -> None:
         """add to / remove from categories"""
@@ -228,7 +245,7 @@ class Game:
 
     @property
     def is_hidden(self) -> bool:
-        """Return whether the game is in the user's favorites"""
+        """Return whether the game is hidden"""
         return ".hidden" in self.get_categories()
 
     def mark_as_hidden(self, is_hidden: bool) -> None:

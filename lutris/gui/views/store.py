@@ -204,4 +204,3 @@ class GameStore(GObject.Object):
                 self.add_item(store_item)
             else:
                 self.add_game(db_game)
-
