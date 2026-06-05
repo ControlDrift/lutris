@@ -211,3 +211,8 @@ class StoreItem:
             logger.warning("Invalid playtime value %s for %s", self.playtime, self)
             _playtime_text = ""  # Do not show erroneous values
         return gtk_safe(_playtime_text)
+
+    @property
+    def recommendation_reasons(self):
+        """Short recommendation reasons for tooltips."""
+        return gtk_safe(self._game_data.get("recommendation_reasons") or "")

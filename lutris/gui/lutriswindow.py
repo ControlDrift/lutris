@@ -76,6 +76,7 @@ from lutris.util.library_sync import LOCAL_LIBRARY_UPDATED, LibrarySyncer
 from lutris.util.linux import LINUX_SYSTEM
 from lutris.util.log import logger
 from lutris.util.path_cache import MISSING_GAMES, add_to_path_cache
+from lutris.util.recommendations import rank_recommended
 from lutris.util.strings import get_natural_sort_key, gtk_safe
 from lutris.util.system import update_desktop_icons
 from lutris.util.wine.wine import clear_wine_version_cache
@@ -131,6 +132,7 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         self.maximized = settings.read_setting("maximized") == "True"
         self.service = None
         self.search_timer_task = COMPLETED_IDLE_TASK
+        self.update_store_task = COMPLETED_IDLE_TASK
         self.filters = self.load_filters()
         self.game_search = None
         self.set_service(self.filters.get("service"))
@@ -494,6 +496,48 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         view_reverse_order = self.view_reverse_order
         view_sorting_installed_first = self.view_sorting_installed_first
 
+        if view_sorting == "recommended":
+            games = []
+            item_by_game_id = {}
+            items_without_game_id = []
+            for item in items:
+                db_game = resolver(item)
+                if not db_game:
+                    items_without_game_id.append(item)
+                    continue
+                game_id = str(db_game.get("id") or db_game.get("appid") or db_game.get("slug") or "")
+                if not game_id:
+                    items_without_game_id.append(item)
+                    continue
+                item_by_game_id[game_id] = item
+                games.append(db_game)
+
+            ranked_games, recommendations = rank_recommended(
+                games,
+                allow_steam_review_fetch=not bool(self.filters.get("service")),
+                allow_llm=not bool(self.filters.get("service")),
+            )
+            for game in ranked_games:
+                game_id = str(game.get("id") or game.get("appid") or game.get("slug") or "")
+                recommendation = recommendations.get(game_id)
+                recommendation_text = ""
+                if recommendation:
+                    reasons = ", ".join(recommendation.reasons)
+                    recommendation_text = f"{recommendation.score:.2f}"
+                    if reasons:
+                        recommendation_text = f"{recommendation_text} - {reasons}"
+                game["recommendation_reasons"] = recommendation_text
+                item = item_by_game_id.get(game_id)
+                if item is not None:
+                    item["recommendation_reasons"] = recommendation_text
+            ranked_items = [
+                item_by_game_id[str(game.get("id") or game.get("appid") or game.get("slug") or "")]
+                for game in ranked_games
+                if str(game.get("id") or game.get("appid") or game.get("slug") or "") in item_by_game_id
+            ]
+            ranked_items.extend(items_without_game_id)
+            return list(reversed(ranked_items)) if view_reverse_order else ranked_items
+
         def get_sort_default(item):
             """Returns the default value to use when the value is missing; we may be able
             to extract this from the item.."""
@@ -813,6 +857,10 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         self.update_store()
 
     def update_store(self) -> None:
+        self.update_store_task.unschedule()
+        self.update_store_task = schedule_at_idle(self._update_store_now, delay_seconds=0.05)
+
+    def _update_store_now(self) -> None:
         service_id = self.filters.get("service")
         service = self.service
         service_media = self.service_media
@@ -1029,7 +1077,7 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         settings.write_setting(setting_key, self.icon_type)
         self.redraw_view()
 
-    def redraw_view(self):
+    def redraw_view(self, update_store: bool = True):
         """Completely reconstruct the main view"""
         if not self.game_store:
             logger.error("No game store yet")
@@ -1038,7 +1086,6 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         view_type = self.current_view_type
 
         if view_type not in self.views:
-            self.game_store = GameStore(self.service, self.service_media)
             if view_type == "grid":
                 self.current_view = GameGridView(
                     self.game_store, hide_text=settings.read_bool_setting("hide_text_under_icons")
@@ -1063,7 +1110,8 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         self.update_view_settings()
         self.games_stack.set_visible_child_name(view_type)
         self.update_action_state()
-        self.update_store()
+        if update_store:
+            self.update_store()
 
     def rebuild_view(self, view_type):
         """Discards the view named by 'view_type' and if it is the current view,

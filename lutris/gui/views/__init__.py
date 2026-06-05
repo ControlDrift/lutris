@@ -17,7 +17,8 @@
     COL_INSTALLED_AT_TEXT,
     COL_PLAYTIME,
     COL_PLAYTIME_TEXT,
-) = list(range(16))
+    COL_RECOMMENDATION_REASONS,
+) = list(range(17))
 
 COLUMN_NAMES = {
     COL_NAME: "name",
@@ -27,4 +28,5 @@ COLUMN_NAMES = {
     COL_LASTPLAYED_TEXT: "lastplayed",
     COL_INSTALLED_AT_TEXT: "installedat",
     COL_PLAYTIME_TEXT: "playtime",
+    COL_RECOMMENDATION_REASONS: "recommendation",
 }

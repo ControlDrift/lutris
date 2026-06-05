@@ -6,8 +6,11 @@ from gi.repository import Gio, Gtk  # type: ignore
 from lutris import settings
 from lutris.gui.config.base_config_box import BaseConfigBox
 from lutris.gui.config.widget_generator import WidgetGenerator
+from lutris.gui.dialogs import ErrorDialog
 from lutris.gui.widgets.status_icon import supports_status_icon
 from lutris.settings import read_setting
+from lutris.util.llm_auth import DEFAULT_LLM_PROVIDER, LLMAuthUnavailable
+from lutris.util.log import logger
 
 
 def _is_system_dark_by_default():
@@ -89,10 +92,57 @@ class InterfacePreferencesBox(BaseConfigBox):
                 list_box_row.add(gen.option_container)
                 listbox.add(list_box_row)
 
+        listbox.add(self._get_llm_provider_row())
         gen.update_widgets()
 
     def on_setting_changed(self, option_key, new_value):
         settings.write_setting(option_key, new_value)
+
+    def _get_llm_provider_row(self):
+        row = Gtk.ListBoxRow(visible=True)
+        row.set_selectable(False)
+        row.set_activatable(False)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12, visible=True)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_right(12)
+        box.set_margin_left(12)
+
+        label = Gtk.Label(_("LLM provider"), visible=True)
+        label.set_alignment(0, 0.5)
+        box.pack_start(label, True, True, 0)
+
+        self.llm_connect_button = Gtk.Button(_("Connect LLM provider"), visible=True)
+        self.llm_connect_button.connect("clicked", self.on_llm_connect_clicked)
+        box.pack_end(self.llm_connect_button, False, False, 0)
+
+        self.llm_disconnect_button = Gtk.Button(_("Disconnect"), visible=True)
+        self.llm_disconnect_button.connect("clicked", self.on_llm_disconnect_clicked)
+        box.pack_end(self.llm_disconnect_button, False, False, 0)
+
+        row.add(box)
+        self.update_llm_buttons()
+        return row
+
+    def update_llm_buttons(self):
+        connected = DEFAULT_LLM_PROVIDER.is_authenticated()
+        self.llm_connect_button.set_sensitive(not connected)
+        self.llm_disconnect_button.set_sensitive(connected)
+
+    def on_llm_connect_clicked(self, _button):
+        try:
+            DEFAULT_LLM_PROVIDER.connect()
+        except LLMAuthUnavailable as ex:
+            ErrorDialog(str(ex), parent=self.get_toplevel())
+        except Exception as ex:  # noqa: BLE001 - auth is optional, keep preferences usable
+            logger.exception("Failed to connect LLM provider: %s", ex)
+            ErrorDialog(_("Unable to connect LLM provider: %s") % ex, parent=self.get_toplevel())
+        self.update_llm_buttons()
+
+    def on_llm_disconnect_clicked(self, _button):
+        DEFAULT_LLM_PROVIDER.disconnect()
+        self.update_llm_buttons()
 
 
 class PreferencesWidgetGenerator(WidgetGenerator):
