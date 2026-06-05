@@ -42,6 +42,7 @@ from lutris.gui.config.preferences_dialog import PreferencesDialog
 from lutris.gui.dialogs import ClientLoginDialog, ErrorDialog, QuestionDialog, get_error_handler, register_error_handler
 from lutris.gui.dialogs.delegates import DialogInstallUIDelegate, DialogLaunchUIDelegate
 from lutris.gui.dialogs.game_import import ImportGameDialog
+from lutris.gui.dialogs.steam_playtime import SteamPlaytimeImportDialog
 from lutris.gui.download_queue import DownloadQueue
 from lutris.gui.views import (
     COL_INSTALLED_AT,
@@ -76,6 +77,7 @@ from lutris.util.library_sync import LOCAL_LIBRARY_UPDATED, LibrarySyncer
 from lutris.util.linux import LINUX_SYSTEM
 from lutris.util.log import logger
 from lutris.util.path_cache import MISSING_GAMES, add_to_path_cache
+from lutris.util.steam import playtime as steam_playtime
 from lutris.util.strings import get_natural_sort_key, gtk_safe
 from lutris.util.system import update_desktop_icons
 from lutris.util.wine.wine import clear_wine_version_cache
@@ -230,6 +232,7 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         self.sidebar.selected_category = selected_category.split(":", maxsplit=1) if selected_category else None
 
         schedule_at_idle(self.sync_library, delay_seconds=1.0)
+        schedule_at_idle(self.offer_steam_playtime_import, delay_seconds=2.0)
 
     def on_busy_started(self):
         display = Gdk.Display.get_default()
@@ -333,6 +336,35 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
 
         if settings.read_bool_setting("library_sync_enabled", True):
             AsyncCall(LibrarySyncer().sync_local_library, on_library_synced if force else None, force=force)
+
+    def offer_steam_playtime_import(self) -> None:
+        """One-time prompt to copy the playtimes recorded by Steam into the library.
+        It can be triggered again later from the preferences."""
+        if settings.read_bool_setting("steam_playtime_import_offered"):
+            return
+        AsyncCall(steam_playtime.get_import_candidates, self.on_steam_playtime_candidates)
+
+    def on_steam_playtime_candidates(self, candidates, error):
+        if error:
+            logger.error("Failed to look up Steam playtimes: %s", error)
+            return
+        if not candidates:
+            return
+        settings.write_setting("steam_playtime_import_offered", True)
+        dialog = SteamPlaytimeImportDialog(candidates, parent=self)
+        if dialog.confirmed:
+            AsyncCall(
+                steam_playtime.apply_import,
+                self.on_steam_playtime_imported,
+                candidates,
+                add_uninstalled=dialog.add_uninstalled,
+            )
+
+    def on_steam_playtime_imported(self, _stats, error):
+        if error:
+            logger.error("Failed to import Steam playtimes: %s", error)
+            return
+        self.update_store()
 
     def update_action_state(self):
         """This invokes the functions to update the enabled states of all the actions
