@@ -7,12 +7,12 @@ from lutris import settings
 from lutris.gui.config.base_config_box import BaseConfigBox
 from lutris.gui.config.widget_generator import WidgetGenerator
 from lutris.gui.dialogs import ErrorDialog, FileDialog
-from lutris.gui.widgets.utils import open_uri
 from lutris.gui.widgets.status_icon import supports_status_icon
+from lutris.gui.widgets.utils import open_uri
 from lutris.settings import read_setting
 from lutris.util.llm_auth import DEFAULT_LLM_PROVIDER, LLMAuthUnavailable
 from lutris.util.log import logger
-
+from lutris.util.recommendations import invalidate_recommendation_cache
 
 GEMINI_OAUTH_CONSOLE_URL = "https://console.cloud.google.com/apis/credentials"
 
@@ -143,16 +143,20 @@ class InterfacePreferencesBox(BaseConfigBox):
 
     def on_llm_connect_clicked(self, _button):
         try:
-            if not DEFAULT_LLM_PROVIDER.client_secret_path.exists():
-                file_dialog = FileDialog(
-                    _("Choose the Google OAuth client JSON downloaded from Google Cloud"),
-                    parent=self.get_toplevel(),
-                )
-                if not file_dialog.filename:
-                    self.update_llm_buttons()
-                    return
-                DEFAULT_LLM_PROVIDER.import_client_secret(file_dialog.filename)
+            default_path = None
+            if DEFAULT_LLM_PROVIDER.client_secret_path.exists():
+                default_path = str(DEFAULT_LLM_PROVIDER.client_secret_path.parent)
+            file_dialog = FileDialog(
+                _("Choose the Google OAuth client JSON downloaded from Google Cloud"),
+                default_path=default_path,
+                parent=self.get_toplevel(),
+            )
+            if not file_dialog.filename:
+                self.update_llm_buttons()
+                return
+            DEFAULT_LLM_PROVIDER.import_client_secret(file_dialog.filename)
             DEFAULT_LLM_PROVIDER.connect()
+            self._refresh_recommendations()
         except LLMAuthUnavailable as ex:
             ErrorDialog(str(ex), parent=self.get_toplevel())
         except Exception as ex:  # noqa: BLE001 - auth is optional, keep preferences usable
@@ -162,7 +166,16 @@ class InterfacePreferencesBox(BaseConfigBox):
 
     def on_llm_disconnect_clicked(self, _button):
         DEFAULT_LLM_PROVIDER.disconnect()
+        self._refresh_recommendations()
         self.update_llm_buttons()
+
+    def _refresh_recommendations(self):
+        """Drop the cached LLM ordering and re-sort the game store with the new auth state."""
+        invalidate_recommendation_cache()
+        application = Gio.Application.get_default()
+        window = getattr(application, "window", None)
+        if window:
+            window.update_store()
 
 
 class PreferencesWidgetGenerator(WidgetGenerator):

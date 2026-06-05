@@ -29,9 +29,10 @@ class GeminiOAuthProviderTester(unittest.TestCase):
                 "installed": {
                     "client_id": "client-id",
                     "client_secret": "client-secret",
+                    "project_id": "lutris-test-project",
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                }
+                },
             }
         )
 
@@ -41,6 +42,7 @@ class GeminiOAuthProviderTester(unittest.TestCase):
             copied_data = json.load(secret_file)
         self.assertEqual(copied_data["installed"]["client_id"], "client-id")
         self.assertEqual(os.stat(self.provider.client_secret_path).st_mode & 0o777, 0o600)
+        self.assertEqual(self.provider.load_project_id(), "lutris-test-project")
 
     def test_import_client_secret_rejects_invalid_json(self):
         source_path = Path(self.tmpdir.name) / "invalid.json"

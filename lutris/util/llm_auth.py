@@ -3,12 +3,12 @@
 import json
 import os
 import queue
-import shutil
 import secrets
+import shutil
 import threading
 import time
-from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
@@ -84,6 +84,32 @@ def _client_config(path: Path) -> dict[str, str]:
     return client_config
 
 
+def _mask_client_id(client_id: str) -> str:
+    if len(client_id) <= 12:
+        return client_id[:4] + "…" + client_id[-4:]
+    return f"{client_id[:6]}…{client_id[-6:]}"
+
+
+def _client_project_id(path: Path) -> str | None:
+    data = _load_json_file(path)
+    if not data:
+        return None
+    # Google puts project_id inside the "installed" object of desktop OAuth client files.
+    installed = data.get("installed")
+    if isinstance(installed, dict):
+        data = installed
+    project_id = data.get("project_id")
+    return project_id if isinstance(project_id, str) and project_id else None
+
+
+def _log_client_secret(action: str, client_config: dict[str, str], project_id: str | None) -> None:
+    masked_client_id = _mask_client_id(client_config["client_id"])
+    if project_id:
+        logger.info("%s Gemini OAuth client %s from project %s", action, masked_client_id, project_id)
+    else:
+        logger.info("%s Gemini OAuth client %s", action, masked_client_id)
+
+
 def _normalize_token_data(data: dict[str, object]) -> dict[str, object]:
     normalized = dict(data)
     expires_in = normalized.get("expires_in")
@@ -154,9 +180,7 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
         self.wfile.write(
-            f"<html><body><p>{message}. You can close this tab and return to Lutris.</p></body></html>".encode(
-                "utf-8"
-            )
+            f"<html><body><p>{message}. You can close this tab and return to Lutris.</p></body></html>".encode("utf-8")
         )
         threading.Thread(target=self.server.shutdown, daemon=True).start()
 
@@ -242,14 +266,18 @@ class GeminiOAuthProvider:
         if source.resolve() != self.client_secret_path.resolve():
             shutil.copyfile(source, self.client_secret_path)
         os.chmod(self.client_secret_path, 0o600)
+        client_config = _client_config(self.client_secret_path)
+        _log_client_secret("Loaded", client_config, _client_project_id(self.client_secret_path))
+
+    def load_project_id(self) -> str | None:
+        return _client_project_id(self.client_secret_path)
 
     def connect(self) -> bool:
         """Open Google's installed-app OAuth flow and cache the resulting token."""
         if not self.client_secret_path.exists():
-            raise LLMAuthUnavailable(
-                "Choose a Google Gemini desktop OAuth client JSON file before connecting"
-            )
+            raise LLMAuthUnavailable("Choose a Google Gemini desktop OAuth client JSON file before connecting")
         client_config = _client_config(self.client_secret_path)
+        _log_client_secret("Using", client_config, _client_project_id(self.client_secret_path))
         server = _OAuthCallbackServer()
         redirect_uri = f"http://127.0.0.1:{server.server_port}/"
         state = secrets.token_urlsafe(24)

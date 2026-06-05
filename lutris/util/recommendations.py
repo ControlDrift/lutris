@@ -1,12 +1,16 @@
 """Game recommendation ranking with an optional LLM reordering pass."""
 
+import hashlib
 import json
+import os
+import time
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
 import requests
 
+from lutris import settings
 from lutris.database import categories as categories_db
 from lutris.util.llm_auth import DEFAULT_LLM_PROVIDER
 from lutris.util.log import logger
@@ -15,6 +19,8 @@ from lutris.util.strings import get_natural_sort_key
 
 MAX_LLM_CANDIDATES = 50
 GEMINI_GENERATE_CONTENT_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+GEMINI_RECOMMENDATIONS_CACHE_PATH = os.path.join(settings.CACHE_DIR, "gemini-recommendations.json")
+GEMINI_RECOMMENDATIONS_CACHE_TTL = 6 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -129,24 +135,73 @@ def _minimal_game_payload(game: dict[str, Any], category_names: dict[str, list[s
     }
 
 
-def _reorder_with_gemini(candidates: list[dict[str, Any]]) -> list[str] | None:
+def _recommendation_cache_key(payload: list[dict[str, Any]]) -> str:
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=True).encode("utf-8")).hexdigest()
+    return digest
+
+
+def _load_recommendation_cache(cache_key: str) -> list[str] | None:
+    try:
+        with open(GEMINI_RECOMMENDATIONS_CACHE_PATH, encoding="utf-8") as cache_file:
+            cache_data = json.load(cache_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(cache_data, dict):
+        return None
+
+    if cache_data.get("cache_key") != cache_key:
+        return None
+
+    updated_at = cache_data.get("updated_at")
+    if not isinstance(updated_at, (int, float)) or time.time() - float(updated_at) > GEMINI_RECOMMENDATIONS_CACHE_TTL:
+        return None
+
+    ordered_ids = cache_data.get("ordered_ids")
+    if not isinstance(ordered_ids, list):
+        return None
+
+    return [str(item) for item in ordered_ids if isinstance(item, str) and item]
+
+
+def _save_recommendation_cache(cache_key: str, ordered_ids: list[str]) -> None:
+    try:
+        os.makedirs(os.path.dirname(GEMINI_RECOMMENDATIONS_CACHE_PATH), exist_ok=True)
+        with open(GEMINI_RECOMMENDATIONS_CACHE_PATH, "w", encoding="utf-8") as cache_file:
+            json.dump(
+                {"cache_key": cache_key, "updated_at": time.time(), "ordered_ids": ordered_ids}, cache_file, indent=2
+            )
+    except OSError as ex:
+        logger.warning("Failed to write Gemini recommendation cache: %s", ex)
+
+
+def invalidate_recommendation_cache() -> None:
+    try:
+        os.unlink(GEMINI_RECOMMENDATIONS_CACHE_PATH)
+    except FileNotFoundError:
+        return
+    except OSError as ex:
+        logger.warning("Failed to remove Gemini recommendation cache: %s", ex)
+
+
+def _reorder_with_gemini(payload: list[dict[str, Any]]) -> list[str] | None:
     access_token = DEFAULT_LLM_PROVIDER.load_access_token()
     if not access_token:
         return None
+    project_id = DEFAULT_LLM_PROVIDER.load_project_id()
 
-    game_ids = [_game_id(game) for game in candidates if _game_id(game)]
-    category_names = categories_db.get_categories_in_games(game_ids)
-    payload = [_minimal_game_payload(game, category_names) for game in candidates]
     prompt = (
         "Rank these Lutris games for recommendation. Use only the provided fields. "
-        "Return strict JSON as {\"recommendations\":[{\"id\":\"known-id\",\"reason\":\"short reason\"}]}. "
-        "Do not add unknown ids.\n"
-        + json.dumps(payload, ensure_ascii=True)
+        'Return strict JSON as {"recommendations":[{"id":"known-id","reason":"short reason"}]}. '
+        "Do not add unknown ids.\n" + json.dumps(payload, ensure_ascii=True)
     )
     try:
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+        if project_id:
+            headers["x-goog-user-project"] = project_id
         response = requests.post(
             GEMINI_GENERATE_CONTENT_URL,
-            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            headers=headers,
             json={"contents": [{"role": "user", "parts": [{"text": prompt}]}]},
             timeout=30,
         )
@@ -164,11 +219,15 @@ def _reorder_with_gemini(candidates: list[dict[str, Any]]) -> list[str] | None:
         if not text:
             raise ValueError("Gemini response did not contain text")
         data = json.loads(text)
+    except requests.HTTPError as ex:
+        body = ex.response.text[:300] if ex.response is not None else ""
+        logger.warning("Gemini recommendation ranking failed: %s %s", ex, body)
+        return None
     except Exception as ex:  # noqa: BLE001 - optional ranking must fall back
         logger.warning("Gemini recommendation ranking failed: %s", ex)
         return None
 
-    known_ids = set(game_ids)
+    known_ids = {str(item["id"]) for item in payload if item.get("id")}
     ordered_ids = []
     for item in data.get("recommendations", []):
         item_id = str(item.get("id") or "")
@@ -183,7 +242,16 @@ def rank_recommended(
     local_games, recommendations = rank_locally(games, allow_steam_review_fetch=allow_steam_review_fetch)
     if not allow_llm:
         return local_games, recommendations
-    llm_ids = _reorder_with_gemini(local_games[:MAX_LLM_CANDIDATES])
+    candidates = local_games[:MAX_LLM_CANDIDATES]
+    candidate_ids = [_game_id(game) for game in candidates if _game_id(game)]
+    category_names = categories_db.get_categories_in_games(candidate_ids)
+    payload = [_minimal_game_payload(game, category_names) for game in candidates]
+    cache_key = _recommendation_cache_key(payload)
+    llm_ids = _load_recommendation_cache(cache_key)
+    if llm_ids is None:
+        llm_ids = _reorder_with_gemini(payload)
+        if llm_ids:
+            _save_recommendation_cache(cache_key, llm_ids)
     if not llm_ids:
         return local_games, recommendations
 

@@ -1,6 +1,8 @@
 import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from lutris import settings
@@ -18,6 +20,12 @@ class RecommendationTester(unittest.TestCase):
         if os.path.exists(settings.DB_PATH):
             os.remove(settings.DB_PATH)
         schema.syncdb()
+        cache_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(cache_dir.cleanup)
+        self.cache_path = Path(cache_dir.name) / "gemini-recommendations.json"
+        cache_patch = mock.patch("lutris.util.recommendations.GEMINI_RECOMMENDATIONS_CACHE_PATH", str(self.cache_path))
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
 
     def add_game(self, name, **kwargs):
         game_id = games_db.add_game(name=name, slug=name.lower().replace(" ", "-"), **kwargs)
@@ -71,7 +79,10 @@ class RecommendationTester(unittest.TestCase):
     def test_steam_service_id_counts_as_appid_for_cached_rating(self):
         game = self.add_game("Steam Game", service="steam", service_id="123")
 
-        with mock.patch("lutris.util.steam_reviews._load_cache", return_value={"123": {"rating": "Very Positive", "updated_at": 9999999999}}):
+        with mock.patch(
+            "lutris.util.steam_reviews._load_cache",
+            return_value={"123": {"rating": "Very Positive", "updated_at": 9999999999}},
+        ):
             ranked, reasons = recommendations.rank_locally([game])
 
         self.assertEqual(ranked[0]["steam_review_summary"], "Very Positive")
@@ -99,13 +110,40 @@ class RecommendationTester(unittest.TestCase):
         }
 
         with (
-            mock.patch("lutris.util.recommendations.DEFAULT_LLM_PROVIDER.load_access_token", return_value="access-token"),
+            mock.patch(
+                "lutris.util.recommendations.DEFAULT_LLM_PROVIDER.load_access_token", return_value="access-token"
+            ),
+            mock.patch("lutris.util.recommendations.DEFAULT_LLM_PROVIDER.load_project_id", return_value="test-project"),
             mock.patch("lutris.util.recommendations.requests.post", return_value=mock_response) as request_post,
         ):
             ranked, _reasons = recommendations.rank_recommended([first, second], allow_steam_review_fetch=False)
 
         self.assertEqual([game["id"] for game in ranked], [second["id"], first["id"]])
         request_post.assert_called_once()
+        self.assertEqual(request_post.call_args.kwargs["headers"]["x-goog-user-project"], "test-project")
+
+        cache_data = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        self.assertEqual(cache_data["ordered_ids"], [second["id"]])
+
+    def test_gemini_reordering_uses_cached_ids(self):
+        first = self.add_game("Alpha")
+        second = self.add_game("Beta")
+
+        with (
+            mock.patch("lutris.util.recommendations._load_recommendation_cache", return_value=[second["id"]]),
+            mock.patch("lutris.util.recommendations._reorder_with_gemini") as reorder_mock,
+        ):
+            ranked, _reasons = recommendations.rank_recommended([first, second], allow_steam_review_fetch=False)
+
+        self.assertEqual([game["id"] for game in ranked], [second["id"], first["id"]])
+        reorder_mock.assert_not_called()
+
+    def test_invalidate_recommendation_cache_removes_file(self):
+        self.cache_path.write_text("{}", encoding="utf-8")
+
+        recommendations.invalidate_recommendation_cache()
+
+        self.assertFalse(self.cache_path.exists())
 
     def test_prompt_payload_excludes_private_and_runtime_fields(self):
         game = self.add_game(
