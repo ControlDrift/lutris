@@ -6,13 +6,16 @@ from gi.repository import Gio, Gtk  # type: ignore
 from lutris import settings
 from lutris.gui.config.base_config_box import BaseConfigBox
 from lutris.gui.config.widget_generator import WidgetGenerator
-from lutris.gui.dialogs import ErrorDialog, FileDialog
+from lutris.gui.dialogs import ErrorDialog, FileDialog, NoticeDialog
+from lutris.gui.dialogs.steam_playtime import SteamPlaytimeImportDialog
 from lutris.gui.widgets.status_icon import supports_status_icon
 from lutris.gui.widgets.utils import open_uri
 from lutris.settings import read_setting
+from lutris.util.jobs import AsyncCall
 from lutris.util.llm_auth import DEFAULT_LLM_PROVIDER, LLMAuthUnavailable
 from lutris.util.log import logger
 from lutris.util.recommendations import invalidate_recommendation_cache
+from lutris.util.steam import playtime as steam_playtime
 
 GEMINI_OAUTH_CONSOLE_URL = "https://console.cloud.google.com/apis/credentials"
 
@@ -97,6 +100,7 @@ class InterfacePreferencesBox(BaseConfigBox):
                 listbox.add(list_box_row)
 
         listbox.add(self._get_llm_provider_row())
+        listbox.add(self._get_steam_playtime_row())
         gen.update_widgets()
 
     def on_setting_changed(self, option_key, new_value):
@@ -176,6 +180,52 @@ class InterfacePreferencesBox(BaseConfigBox):
         window = getattr(application, "window", None)
         if window:
             window.update_store()
+
+    def _get_steam_playtime_row(self):
+        row = Gtk.ListBoxRow(visible=True)
+        row.set_selectable(False)
+        row.set_activatable(False)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12, visible=True)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_right(12)
+        box.set_margin_left(12)
+
+        label = Gtk.Label(_("Steam playtime"), visible=True)
+        label.set_alignment(0, 0.5)
+        box.pack_start(label, True, True, 0)
+
+        self.steam_playtime_button = Gtk.Button(_("Import from Steam"), visible=True)
+        self.steam_playtime_button.connect("clicked", self.on_steam_playtime_import_clicked)
+        box.pack_end(self.steam_playtime_button, False, False, 0)
+
+        row.add(box)
+        return row
+
+    def on_steam_playtime_import_clicked(self, _button):
+        self.steam_playtime_button.set_sensitive(False)
+        AsyncCall(steam_playtime.get_import_candidates, self.on_steam_playtime_candidates)
+
+    def on_steam_playtime_candidates(self, candidates, error):
+        self.steam_playtime_button.set_sensitive(True)
+        if error:
+            ErrorDialog(_("Unable to read Steam playtimes: %s") % error, parent=self.get_toplevel())
+            return
+        # Re-offering manually counts as the initial offer, the startup prompt can stay quiet.
+        settings.write_setting("steam_playtime_import_offered", True)
+        if not candidates:
+            NoticeDialog(
+                _("Steam has no playtime that is missing from your Lutris library."), parent=self.get_toplevel()
+            )
+            return
+        dialog = SteamPlaytimeImportDialog(candidates, parent=self.get_toplevel())
+        if dialog.confirmed:
+            steam_playtime.apply_import(candidates, add_uninstalled=dialog.add_uninstalled)
+            application = Gio.Application.get_default()
+            window = getattr(application, "window", None)
+            if window:
+                window.update_store()
 
 
 class PreferencesWidgetGenerator(WidgetGenerator):
