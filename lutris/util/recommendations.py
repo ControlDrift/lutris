@@ -12,6 +12,7 @@ import requests
 
 from lutris import settings
 from lutris.database import categories as categories_db
+from lutris.database import games as games_db
 from lutris.util.llm_auth import DEFAULT_LLM_PROVIDER
 from lutris.util.log import logger
 from lutris.util.steam_reviews import apply_cached_steam_review_summaries, get_steam_appid
@@ -140,7 +141,11 @@ def _recommendation_cache_key(payload: list[dict[str, Any]]) -> str:
     return digest
 
 
-def _load_recommendation_cache(cache_key: str) -> list[str] | None:
+def _load_recommendation_cache() -> list[str] | None:
+    """Return the cached Gemini ordering if it is still fresh.
+
+    The cache is reused for its whole TTL even if the games change; we only
+    want a single Gemini request, with every later ranking served from cache."""
     try:
         with open(GEMINI_RECOMMENDATIONS_CACHE_PATH, encoding="utf-8") as cache_file:
             cache_data = json.load(cache_file)
@@ -148,9 +153,6 @@ def _load_recommendation_cache(cache_key: str) -> list[str] | None:
         return None
 
     if not isinstance(cache_data, dict):
-        return None
-
-    if cache_data.get("cache_key") != cache_key:
         return None
 
     updated_at = cache_data.get("updated_at")
@@ -184,6 +186,19 @@ def invalidate_recommendation_cache() -> None:
         logger.warning("Failed to remove Gemini recommendation cache: %s", ex)
 
 
+def _is_full_library_payload(payload: list[dict[str, Any]]) -> bool:
+    """True if the candidates cover the library, as far as MAX_LLM_CANDIDATES allows.
+
+    During startup the view ranks before all games are loaded; spending the
+    single Gemini request on such a partial list would poison the cache."""
+    try:
+        library_size = len(games_db.get_games())
+    except Exception as ex:  # noqa: BLE001 - optional ranking must fall back
+        logger.warning("Could not determine library size for Gemini ranking: %s", ex)
+        return False
+    return len(payload) >= min(MAX_LLM_CANDIDATES, library_size)
+
+
 def _reorder_with_gemini(payload: list[dict[str, Any]]) -> list[str] | None:
     access_token = DEFAULT_LLM_PROVIDER.load_access_token()
     if not access_token:
@@ -202,7 +217,10 @@ def _reorder_with_gemini(payload: list[dict[str, Any]]) -> list[str] | None:
         response = requests.post(
             GEMINI_GENERATE_CONTENT_URL,
             headers=headers,
-            json={"contents": [{"role": "user", "parts": [{"text": prompt}]}]},
+            json={
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json"},
+            },
             timeout=30,
         )
         response.raise_for_status()
@@ -218,6 +236,10 @@ def _reorder_with_gemini(payload: list[dict[str, Any]]) -> list[str] | None:
                 break
         if not text:
             raise ValueError("Gemini response did not contain text")
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else ""
+            text = text.rsplit("```", 1)[0]
         data = json.loads(text)
     except requests.HTTPError as ex:
         body = ex.response.text[:300] if ex.response is not None else ""
@@ -246,12 +268,11 @@ def rank_recommended(
     candidate_ids = [_game_id(game) for game in candidates if _game_id(game)]
     category_names = categories_db.get_categories_in_games(candidate_ids)
     payload = [_minimal_game_payload(game, category_names) for game in candidates]
-    cache_key = _recommendation_cache_key(payload)
-    llm_ids = _load_recommendation_cache(cache_key)
-    if llm_ids is None:
+    llm_ids = _load_recommendation_cache()
+    if llm_ids is None and payload and _is_full_library_payload(payload):
         llm_ids = _reorder_with_gemini(payload)
         if llm_ids:
-            _save_recommendation_cache(cache_key, llm_ids)
+            _save_recommendation_cache(_recommendation_cache_key(payload), llm_ids)
     if not llm_ids:
         return local_games, recommendations
 
