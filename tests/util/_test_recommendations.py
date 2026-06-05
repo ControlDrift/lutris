@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from unittest import mock
@@ -85,6 +86,26 @@ class RecommendationTester(unittest.TestCase):
             ranked, _reasons = recommendations.rank_recommended([first, second])
 
         self.assertEqual([game["id"] for game in ranked], [second["id"], first["id"]])
+
+    def test_gemini_reordering_uses_rest_api(self):
+        first = self.add_game("Alpha")
+        second = self.add_game("Beta")
+
+        response_text = json.dumps({"recommendations": [{"id": second["id"], "reason": "Best match"}]})
+        mock_response = mock.Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": response_text}]}}],
+        }
+
+        with (
+            mock.patch("lutris.util.recommendations.DEFAULT_LLM_PROVIDER.load_access_token", return_value="access-token"),
+            mock.patch("lutris.util.recommendations.requests.post", return_value=mock_response) as request_post,
+        ):
+            ranked, _reasons = recommendations.rank_recommended([first, second], allow_steam_review_fetch=False)
+
+        self.assertEqual([game["id"] for game in ranked], [second["id"], first["id"]])
+        request_post.assert_called_once()
 
     def test_prompt_payload_excludes_private_and_runtime_fields(self):
         game = self.add_game(

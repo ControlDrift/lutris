@@ -5,6 +5,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
+import requests
+
 from lutris.database import categories as categories_db
 from lutris.util.llm_auth import DEFAULT_LLM_PROVIDER
 from lutris.util.log import logger
@@ -12,6 +14,7 @@ from lutris.util.steam_reviews import apply_cached_steam_review_summaries, get_s
 from lutris.util.strings import get_natural_sort_key
 
 MAX_LLM_CANDIDATES = 50
+GEMINI_GENERATE_CONTENT_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 
 @dataclass(frozen=True)
@@ -127,12 +130,8 @@ def _minimal_game_payload(game: dict[str, Any], category_names: dict[str, list[s
 
 
 def _reorder_with_gemini(candidates: list[dict[str, Any]]) -> list[str] | None:
-    creds = DEFAULT_LLM_PROVIDER.load_credentials()
-    if not creds:
-        return None
-    try:
-        import google.generativeai as genai  # type: ignore
-    except ImportError:
+    access_token = DEFAULT_LLM_PROVIDER.load_access_token()
+    if not access_token:
         return None
 
     game_ids = [_game_id(game) for game in candidates if _game_id(game)]
@@ -145,9 +144,26 @@ def _reorder_with_gemini(candidates: list[dict[str, Any]]) -> list[str] | None:
         + json.dumps(payload, ensure_ascii=True)
     )
     try:
-        genai.configure(credentials=creds)
-        response = genai.GenerativeModel("gemini-2.5-flash").generate_content(prompt)
-        data = json.loads(response.text)
+        response = requests.post(
+            GEMINI_GENERATE_CONTENT_URL,
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={"contents": [{"role": "user", "parts": [{"text": prompt}]}]},
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        text = ""
+        for candidate in data.get("candidates", []):
+            content = candidate.get("content", {})
+            for part in content.get("parts", []):
+                text = str(part.get("text") or "")
+                if text:
+                    break
+            if text:
+                break
+        if not text:
+            raise ValueError("Gemini response did not contain text")
+        data = json.loads(text)
     except Exception as ex:  # noqa: BLE001 - optional ranking must fall back
         logger.warning("Gemini recommendation ranking failed: %s", ex)
         return None

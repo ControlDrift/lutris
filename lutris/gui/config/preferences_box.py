@@ -6,11 +6,15 @@ from gi.repository import Gio, Gtk  # type: ignore
 from lutris import settings
 from lutris.gui.config.base_config_box import BaseConfigBox
 from lutris.gui.config.widget_generator import WidgetGenerator
-from lutris.gui.dialogs import ErrorDialog
+from lutris.gui.dialogs import ErrorDialog, FileDialog
+from lutris.gui.widgets.utils import open_uri
 from lutris.gui.widgets.status_icon import supports_status_icon
 from lutris.settings import read_setting
 from lutris.util.llm_auth import DEFAULT_LLM_PROVIDER, LLMAuthUnavailable
 from lutris.util.log import logger
+
+
+GEMINI_OAUTH_CONSOLE_URL = "https://console.cloud.google.com/apis/credentials"
 
 
 def _is_system_dark_by_default():
@@ -113,6 +117,10 @@ class InterfacePreferencesBox(BaseConfigBox):
         label.set_alignment(0, 0.5)
         box.pack_start(label, True, True, 0)
 
+        self.llm_google_button = Gtk.Button(_("Open Google Cloud"), visible=True)
+        self.llm_google_button.connect("clicked", self.on_llm_google_clicked)
+        box.pack_end(self.llm_google_button, False, False, 0)
+
         self.llm_connect_button = Gtk.Button(_("Connect LLM provider"), visible=True)
         self.llm_connect_button.connect("clicked", self.on_llm_connect_clicked)
         box.pack_end(self.llm_connect_button, False, False, 0)
@@ -125,6 +133,9 @@ class InterfacePreferencesBox(BaseConfigBox):
         self.update_llm_buttons()
         return row
 
+    def on_llm_google_clicked(self, _button):
+        open_uri(GEMINI_OAUTH_CONSOLE_URL)
+
     def update_llm_buttons(self):
         connected = DEFAULT_LLM_PROVIDER.is_authenticated()
         self.llm_connect_button.set_sensitive(not connected)
@@ -132,6 +143,15 @@ class InterfacePreferencesBox(BaseConfigBox):
 
     def on_llm_connect_clicked(self, _button):
         try:
+            if not DEFAULT_LLM_PROVIDER.client_secret_path.exists():
+                file_dialog = FileDialog(
+                    _("Choose the Google OAuth client JSON downloaded from Google Cloud"),
+                    parent=self.get_toplevel(),
+                )
+                if not file_dialog.filename:
+                    self.update_llm_buttons()
+                    return
+                DEFAULT_LLM_PROVIDER.import_client_secret(file_dialog.filename)
             DEFAULT_LLM_PROVIDER.connect()
         except LLMAuthUnavailable as ex:
             ErrorDialog(str(ex), parent=self.get_toplevel())
